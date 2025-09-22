@@ -1,8 +1,11 @@
-from dq_platform.dq_manager import DQManager
-from dq_platform.checks.completeness_checks.completeness_ratio_check import CompletenessRatioRule
-from dq_platform.core.cache_obj import CacheObject
-from dq_platform.core._enums import SeverityLevel
-from pyspark.sql import SparkSession, DataFrame, Column
+from pyspark.sql.dataframe import DataFrame
+
+
+from pyspark_data_quality.dq_manager import DQManager
+from pyspark_data_quality.checks.completeness_checks.completeness_col_ratio_check import CompletenessColRatioRule
+from pyspark_data_quality.result_obj import ResultObj
+from pyspark_data_quality.core._enums import SeverityLevel
+from pyspark.sql import SparkSession, Column
 from pyspark.sql import functions as F
 
 
@@ -24,17 +27,26 @@ def create_dataframe_fast(spark: SparkSession, n: int = 900_000, partitions: int
         F.concat(F.lit("city_"), F.col("id")).alias("city"),
     )
 
+    
+    
 def test_dq_manager(spark_session: SparkSession) -> None:
-    dq_manager = DQManager()
+    dq_manager = DQManager(spark=spark_session)
     df: DataFrame = create_dataframe_fast(spark_session)
     df.show(10)
     print(df.count())
     dq_manager.set_data(df)
-    dq_manager.add_check(CompletenessRatioRule(
+    dq_manager.add_check(CompletenessColRatioRule(
         dataset="test",
         run_id="test",
         severity_level=SeverityLevel.HIGH,
         metric_name="test",
-        input_attributes=["test"],
+        input_attributes=["name", "age", "city"],
         threshold=0.5)
     )
+    result_obj: ResultObj = dq_manager.run()
+    valid_df: DataFrame = result_obj.get_valid_df()
+    valid_df.show(10) 
+    invalid_df: DataFrame = result_obj.get_invalid_df()
+    invalid_df.show(10) 
+    metric_results: DataFrame = result_obj.get_metric_results()
+    metric_results.show(10)

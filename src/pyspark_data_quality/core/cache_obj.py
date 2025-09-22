@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from dq_platform.utils.utils import singleton
+from pyspark_data_quality.utils.utils import singleton
 
 class CacheObjectAbstract(ABC):
 

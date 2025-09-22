@@ -3,8 +3,8 @@ from __future__ import annotations
 from abc import ABC
 from abc import abstractmethod
 from pyspark.sql import DataFrame
-from dq_platform.result_obj import MetricResult
-from dq_platform.core.cache_obj import CacheObject
+from pyspark_data_quality.core.models import MetricResult
+from pyspark_data_quality.core.cache_obj import CacheObject
 
 class AbstractCheck(ABC):
     @abstractmethod
@@ -21,6 +21,14 @@ class AbstractCheck(ABC):
     
     @cache_obj.setter
     def cache_obj(self, cache_obj: CacheObject) -> None:
+        ...
+        
+    @abstractmethod
+    def get_valid_df(self,df: DataFrame) -> DataFrame:
+        ...
+    
+    @abstractmethod
+    def get_invalid_df(self,df: DataFrame) -> DataFrame:
         ...
     
 class BaseCheck(AbstractCheck):
