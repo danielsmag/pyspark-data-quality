@@ -23,7 +23,7 @@ class DQManager:
         self.config = DQManagerConfig()
         self.cache = CacheObject()
         self.list_of_checks = []
-        self.spark = spark
+        self.spark: SparkSession = spark
 
     def add_check(self, check: BaseCheck) -> None:
         check.cache_obj = self.cache
