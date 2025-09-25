@@ -7,9 +7,6 @@ from pyspark_data_quality.core.models import MetricResult
 from pyspark_data_quality.core.cache_obj import CacheObject
 
 class AbstractCheck(ABC):
-    @abstractmethod
-    def set_data(self, df: DataFrame) -> DataFrame:
-        ...
     
     @abstractmethod
     def get_metric_results(self) -> list[MetricResult]:
@@ -29,6 +26,14 @@ class AbstractCheck(ABC):
     
     @abstractmethod
     def get_invalid_df(self,df: DataFrame) -> DataFrame:
+        ...
+        
+    @abstractmethod
+    def valid(self,*, df: DataFrame, cols: list[str] = [],col: str = "") -> DataFrame:
+        ...
+    
+    @abstractmethod
+    def invalid(self,*, df: DataFrame, cols: list[str] = [],col: str = "") -> DataFrame:
         ...
     
 class BaseCheck(AbstractCheck):
