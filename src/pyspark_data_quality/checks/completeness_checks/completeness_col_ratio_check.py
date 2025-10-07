@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+from pyspark.sql.column import Column
 from pyspark.sql import functions as F, DataFrame, Row
-from typing import List, Any, Literal
-
+from typing import Callable, Literal
+from typing_extensions import override
 from datetime import datetime
 
 from pyspark_data_quality.checks.base_check import BaseCheck
-from pyspark_data_quality.core.cache_obj import CacheObject
 from pyspark_data_quality.core._enums import SeverityLevel, Dimension, CheckStatus
 from pyspark_data_quality.core.exceptation import ColumnNotFoundError
 from pyspark_data_quality.core.models import MetricResult
@@ -16,21 +16,24 @@ __all__: list[str] = ["CompletenessColRatioRule"]
 
 
 class CompletenessColRatioRule(BaseCheck):
+    """
+    Completeness Column Ratio Check
+    Computes the ratio of non-null values per column in `input_attributes`
+    Compares the ratio to `threshold` and emits a success/failure message
+    Attributes: `dataset`, `run_id`, `metric_name`, `severity_level`, `input_attributes`, `threshold`, `dimension`
+    """
+    
     dataset: str
     run_id: str
-    _cache_obj: CacheObject | None
     severity_level: SeverityLevel
     metric_name: str
-    input_attributes: List[str]
+    input_attributes: list[str]
     threshold: float
     check_type: str
     dimension: Dimension
     run_datetime: str
-    _df_count: int | None
-    _df: DataFrame | None
-    _valid_df: DataFrame | None
-    _invalid_df: DataFrame | None
-    _metric_result: list[MetricResult]
+    condition: Callable[..., Column] | Column | None = None
+  
 
     def __init__(
         self,
@@ -38,10 +41,12 @@ class CompletenessColRatioRule(BaseCheck):
         run_id: str,
         severity_level: SeverityLevel,
         metric_name: str,
-        input_attributes: List[str],
+        input_attributes: list[str],
         threshold: float,
         run_datetime: str = datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        condition: Callable[..., Column] | Column | None = None,
     ) -> None:
+        super().__init__()
         self.dataset = dataset
         self.run_id = run_id
         self.check_type = "completeness"
@@ -51,88 +56,44 @@ class CompletenessColRatioRule(BaseCheck):
         self.input_attributes = input_attributes
         self.threshold = threshold 
         self.run_datetime = run_datetime
-        self._cache_obj = None
-        self._df_count = None
-        self._df = None
-        self._valid_df = None
-        self._invalid_df = None
-        self._metric_result = []
-
+        self.condition = condition
+        
     def _pre_check(self, df: DataFrame) -> None:
-        missing: List[str] = [c for c in self.input_attributes if c not in df.columns]
+        missing: list[str] = [c for c in self.input_attributes if c not in df.columns]
         if missing:
             raise ColumnNotFoundError(f"Columns not found: {missing}")
     
-    def _prepare_df(self) -> None:
-        df: DataFrame = self.df
-     
-        for c in self.input_attributes:
-            if c not in df.columns:
-                raise ColumnNotFoundError(f"Columns not found: {c}")
-            
+    def _condition_to_col(self, df: DataFrame) -> Column:
+        if self.condition is None:
+            return F.lit(True)  
+        if isinstance(self.condition, Column):
+            return self.condition
+        if callable(self.condition):
+            out: Column = self.condition(df)
+            if not isinstance(out, Column):
+                raise TypeError("Callable condition must return a Column.")
+            return out
+        raise TypeError("condition must be Column | dict | Callable[[DataFrame], Column] | None")
+    
+    @override
     def valid(self,*, df: DataFrame, cols: list[str] = [],col: str = "") -> DataFrame:
         self._pre_check(df)
-        return df.filter(F.col(col).isNotNull())
+        scope: Column = self._condition_to_col(df)
+        return df.filter(F.col(col).isNotNull() & scope)
 
+    @override
     def invalid(self,*, df: DataFrame, cols: list[str] = [],col: str = "") -> DataFrame:
-        return df.filter(F.col(col).isNull())
-
-    @property
-    def df_count(self) -> int:
-        if self.cache_obj.get("df_count") is None:
-            self.cache_obj.set("df_count", self.df.count())
-        c: Any = self.cache_obj.get("df_count",type_check=int)
-        assert isinstance(c, int)
-        return c
-
-    @property
-    def df(self) -> DataFrame:
-        if self._df is None:
-            raise ValueError("DataFrame is not set")
-        return self._df
-
-    @df.setter
-    def df(self, df: DataFrame) -> None:
-        self._df = df
-
-    def get_valid_df(self,df: DataFrame) -> DataFrame:
-        self.df = df
-        if self._valid_df is None:
-            for col in self.input_attributes:
-                self._valid_df = self.valid(df=self.df, col=col)
-        assert isinstance(self._valid_df, DataFrame)
-        return self._valid_df
-
-    def get_invalid_df(self,df: DataFrame) -> DataFrame:
-        self.df = df
-        if self._invalid_df is None:
-            for col in self.input_attributes:
-                self._invalid_df = self.invalid(df=self.df, col=col)
-        assert isinstance(self._invalid_df, DataFrame)
-        return self._invalid_df
-
-    def get_metric_results(self) -> list[MetricResult]:
-        self._metric_result = self.metric_results()
-        return self._metric_result
-
-    @property
-    def cache_obj(self) -> CacheObject:
-        if not self._cache_obj:
-            raise ValueError("Cache object is not set")
-        return self._cache_obj
-
-    @cache_obj.setter
-    def cache_obj(self, cache_obj: CacheObject) -> None:
-        self._cache_obj = cache_obj
+        scope: Column = self._condition_to_col(df)
+        return df.filter(F.col(col).isNull() & scope)
 
     def metric_results(self) -> list[MetricResult]:
         self._pre_check(self.df)
-          
+        scope: Column = self._condition_to_col(self.df)
         ratios: Row | None = self.df.select([
         F.avg(F.col(c).isNotNull().cast("double")).alias(c)
         for c in self.input_attributes
         ]).first()
-        
+        ratios = ratios.filter(scope) if ratios is not None else None
         if ratios is None:
             raise ValueError("No count results found")
         
@@ -160,6 +121,7 @@ class CompletenessColRatioRule(BaseCheck):
                 value_double=pct,
                 value_string=msg,
                 ingest_datetime=now,
+                extra_info={"condition": self.condition},
             ))
         self._metric_result = out
         return out

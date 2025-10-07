@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from functools import reduce
 from pyspark.sql.column import Column
-from pyspark.sql import functions as F, DataFrame
-from typing import List, Literal, Callable
+from pyspark.sql import functions as F, DataFrame, Row
+from typing import Callable, Literal
 from typing_extensions import override
 from datetime import datetime
 
@@ -13,24 +12,28 @@ from pyspark_data_quality.core.exceptation import ColumnNotFoundError
 from pyspark_data_quality.core.models import MetricResult
 
 
-__all__: list[str] = ["CompletenessRawRatioRule"]
+__all__: list[str] = ["UniqueCheck"]
 
 
-class CompletenessRawRatioRule(BaseCheck):
+class UniqueCheck(BaseCheck):
     """
-    Completeness Raw Ratio Check
-    Computes the ratio of non-null values in `input_attributes`
-    Compares the ratio to `threshold` and emits a success/failure message
+    Unique Check
+    Computes the uniqueness of values per column in `input_attributes`
+    Compares the uniqueness to `threshold` and emits a success/failure message
     Attributes: `dataset`, `run_id`, `metric_name`, `severity_level`, `input_attributes`, `threshold`, `dimension`
     """
+    
     dataset: str
     run_id: str
     severity_level: SeverityLevel
     metric_name: str
+    input_attributes: list[str]
+    threshold: float
     check_type: str
     dimension: Dimension
     run_datetime: str
     condition: Callable[..., Column] | Column | None = None
+  
 
     def __init__(
         self,
@@ -39,7 +42,7 @@ class CompletenessRawRatioRule(BaseCheck):
         severity_level: SeverityLevel,
         metric_name: str,
         input_attributes: list[str],
-        threshold: float = 1.0,
+        threshold: float,
         run_datetime: str = datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         condition: Callable[..., Column] | Column | None = None,
     ) -> None:
@@ -54,9 +57,9 @@ class CompletenessRawRatioRule(BaseCheck):
         self.threshold = threshold 
         self.run_datetime = run_datetime
         self.condition = condition
-
+        
     def _pre_check(self, df: DataFrame) -> None:
-        missing: List[str] = [c for c in self.input_attributes if c not in df.columns]
+        missing: list[str] = [c for c in self.input_attributes if c not in df.columns]
         if missing:
             raise ColumnNotFoundError(f"Columns not found: {missing}")
     
@@ -72,47 +75,54 @@ class CompletenessRawRatioRule(BaseCheck):
             return out
         raise TypeError("condition must be Column | dict | Callable[[DataFrame], Column] | None")
     
-    @override     
+    @override
     def valid(self,*, df: DataFrame, cols: list[str] = [],col: str = "") -> DataFrame:
         self._pre_check(df)
         scope: Column = self._condition_to_col(df)
-        conditions: list[Column] = [F.col(c).isNotNull() for c in self.input_attributes]
-        combined_condition: Column = reduce(lambda a, b: a & b, conditions)
-        return df.filter(combined_condition & scope)
-        
+        return df.filter(scope).dropDuplicates(cols)
+
     @override
     def invalid(self,*, df: DataFrame, cols: list[str] = [],col: str = "") -> DataFrame:
         scope: Column = self._condition_to_col(df)
-        conditions: list[Column] = [F.col(c).isNull() for c in self.input_attributes]
-        combined_condition: Column = reduce(lambda a, b: a | b, conditions)
-        return df.filter(combined_condition & scope)
+        return df.filter(scope).groupBy(cols).count().filter("count > 1")
 
-    @override
     def metric_results(self) -> list[MetricResult]:
         self._pre_check(self.df)
+        scope: Column = self._condition_to_col(self.df)
+        ratios: Row | None = self.df.select([
+        F.avg(F.col(c).isNotNull().cast("double")).alias(c)
+        for c in self.input_attributes
+        ]).first()
+        ratios = ratios.filter(scope) if ratios is not None else None
+        if ratios is None:
+            raise ValueError("No count results found")
+        
+        ratios_dict: dict = ratios.asDict()
+        
         out: list[MetricResult] = []
         now: datetime = datetime.now()
-        pct: float = self.valid_df.count()/self.df.count()
-        status: Literal[CheckStatus.SUCCESS, CheckStatus.FAILURE] = CheckStatus.SUCCESS if self.valid_df.count() >= self.df.count() else CheckStatus.FAILURE
-        msg: str = (f"Raw data completeness {pct:.2%} >= {self.threshold:.2%}"
-        if status == CheckStatus.SUCCESS
-        else f"Raw data completeness {pct:.2%} < {self.threshold:.2%}")
+        for col in self.input_attributes:
+            pct: float = float(ratios_dict.get(col, 0.0))  
+            status: Literal[CheckStatus.SUCCESS, CheckStatus.FAILURE] = CheckStatus.SUCCESS if pct >= self.threshold else CheckStatus.FAILURE
+            msg: str = (f"{col} completeness {pct:.2%} >= {self.threshold:.2%}"
+                if status == CheckStatus.SUCCESS
+                else f"{col} completeness {pct:.2%} < {self.threshold:.2%}")
 
-        out.append(MetricResult(
-            dataset=self.dataset,
-            run_id=self.run_id,
-            run_ts=now,
-            metric_name=self.metric_name,
-            column="",
-            dimension=self.dimension.value,
-            severity_level=self.severity_level.value,
-            threshold_result=pct,
-            threshold=self.threshold,
-            value_double=pct,
-            value_string=msg,
-            ingest_datetime=now,
-            extra_info={"condition": self.condition},
-        ))
+            out.append(MetricResult(
+                dataset=self.dataset,
+                run_id=self.run_id,
+                run_ts=now,
+                metric_name=self.metric_name,
+                column=col,
+                dimension=self.dimension.value,
+                severity_level=self.severity_level.value,
+                threshold_result=pct,
+                threshold=self.threshold,
+                value_double=pct,
+                value_string=msg,
+                ingest_datetime=now,
+                extra_info={"condition": self.condition},
+            ))
         self._metric_result = out
         return out
 

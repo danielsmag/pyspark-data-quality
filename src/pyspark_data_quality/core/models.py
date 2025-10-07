@@ -17,4 +17,5 @@ class MetricResult(BaseModel):
     value_double: float = Field(default=0.0)
     value_string: str = Field(default="")
     ingest_datetime: datetime = Field(default_factory=datetime.now)
+    extra_info: dict = Field(default_factory=dict)
  
