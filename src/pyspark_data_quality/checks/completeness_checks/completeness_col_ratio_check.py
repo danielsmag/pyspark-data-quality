@@ -79,25 +79,39 @@ class CompletenessColRatioRule(BaseCheck):
     def valid(self,*, df: DataFrame, cols: list[str] = [],col: str = "") -> DataFrame:
         self._pre_check(df)
         scope: Column = self._condition_to_col(df)
-        return df.filter(F.col(col).isNotNull() & scope)
+        if col:
+            return df.filter(F.col(col).isNotNull() & scope)
+        if cols:
+            condition: Column = F.lit(True)
+            for c in cols:
+                condition = condition & F.col(c).isNotNull()
+            return df.filter(condition & scope)
+        return df.filter(scope)
 
     @override
     def invalid(self,*, df: DataFrame, cols: list[str] = [],col: str = "") -> DataFrame:
         scope: Column = self._condition_to_col(df)
-        return df.filter(F.col(col).isNull() & scope)
+        if col:
+            return df.filter(F.col(col).isNull() & scope)
+        if cols:
+            condition: Column = F.lit(False)
+            for c in cols:
+                condition = condition | F.col(c).isNull()
+            return df.filter(condition & scope)
+        return df.filter(scope & F.lit(False))
 
     def metric_results(self) -> list[MetricResult]:
         self._pre_check(self.df)
         scope: Column = self._condition_to_col(self.df)
-        ratios: Row | None = self.df.select([
-        F.avg(F.col(c).isNotNull().cast("double")).alias(c)
-        for c in self.input_attributes
+        filtered_df: DataFrame = self.df.filter(scope)
+        ratios_row: Row | None = filtered_df.select([
+            F.avg(F.col(c).isNotNull().cast("double")).alias(c)
+            for c in self.input_attributes
         ]).first()
-        ratios = ratios.filter(scope) if ratios is not None else None
-        if ratios is None:
+        if ratios_row is None:
             raise ValueError("No count results found")
         
-        ratios_dict: dict = ratios.asDict()
+        ratios_dict: dict = ratios_row.asDict()
         
         out: list[MetricResult] = []
         now: datetime = datetime.now()
@@ -121,7 +135,7 @@ class CompletenessColRatioRule(BaseCheck):
                 value_double=pct,
                 value_string=msg,
                 ingest_datetime=now,
-                extra_info={"condition": self.condition},
+                extra_info={"condition": str(self.condition) if self.condition is not None else None},
             ))
         self._metric_result = out
         return out

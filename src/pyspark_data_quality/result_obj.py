@@ -2,7 +2,7 @@ from __future__ import annotations
 from pyspark.rdd import RDD
 
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, TimestampType, MapType
 
 from typing import TYPE_CHECKING, Any
 
@@ -12,7 +12,22 @@ if TYPE_CHECKING:
 
 __all__: list[str] = ["ResultObj"]
 
-
+schema: StructType = StructType([
+            StructField("dataset", StringType(), False),
+            StructField("run_id", StringType(), False),
+            StructField("run_ts", TimestampType(), False),
+            StructField("metric_name", StringType(), False),
+            StructField("column", StringType(), False),
+            StructField("dimension", StringType(), False),
+            StructField("severity_level", StringType(), False),
+            StructField("threshold_result", DoubleType(), True),
+            StructField("threshold_range", DoubleType(), True),
+            StructField("threshold", DoubleType(), True),
+            StructField("value_double", DoubleType(), True),
+            StructField("value_string", StringType(), True),
+            StructField("ingest_datetime", TimestampType(), False),
+            StructField("extra_info", MapType(StringType(), StringType()), True),
+        ])
 class ResultObj:
     def __init__(
         self,
@@ -25,6 +40,7 @@ class ResultObj:
         self._valid_df: DataFrame | None = None
         self._invalid_df: DataFrame | None = None
         self.spark: SparkSession = spark
+        
     def get_valid_df(self) -> DataFrame:
         valid_df: DataFrame = self.df
         for check in self.list_of_checks:
@@ -48,22 +64,7 @@ class ResultObj:
             
         rows: list[dict] = [result.model_dump() for result in metric_results]
         if rows:
-            return self.spark.createDataFrame(rows) # type: ignore
-
-        schema: StructType = StructType([
-            StructField("dataset", StringType(), False),
-            StructField("run_id", StringType(), False),
-            StructField("run_ts", TimestampType(), False),
-            StructField("metric_name", StringType(), False),
-            StructField("column", StringType(), False),
-            StructField("dimension", StringType(), False),
-            StructField("severity_level", StringType(), False),
-            StructField("threshold_result", DoubleType(), True),
-            StructField("threshold_range", DoubleType(), True),
-            StructField("threshold", DoubleType(), True),
-            StructField("value_double", DoubleType(), True),
-            StructField("value_string", StringType(), True),
-            StructField("ingest_datetime", TimestampType(), False),
-        ])
+            return self.spark.createDataFrame(rows, schema) # type: ignore
+        
         empty_rdd: RDD[Any] = self.spark.sparkContext.emptyRDD()
         return self.spark.createDataFrame(empty_rdd, schema)

@@ -121,7 +121,7 @@ class UniqueCheck(BaseCheck):
                 value_double=pct,
                 value_string=msg,
                 ingest_datetime=now,
-                extra_info={"condition": self.condition},
+                extra_info={"condition": str(self.condition) if self.condition is not None else None},
             ))
         self._metric_result = out
         return out
